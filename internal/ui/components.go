@@ -9,15 +9,17 @@ import (
 	"github.com/kashifsb/nsm/internal/config"
 )
 
-// Header component
+// Header component with enhanced design
 func RenderHeader() string {
 	logo := logoStyle.Render("🚀 NSM")
-	title := headerStyle.Render("Enterprise Development Environment Manager")
+	title := titleStyle.Render("Enterprise Development Environment Manager")
+	subtitle := subtitleStyle.Render("Clean URLs • Automatic HTTPS • Professional DNS")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Center,
 		logo,
 		title,
+		subtitle,
 	)
 }
 
@@ -144,19 +146,25 @@ func RenderURLs(cfg *config.Config, httpPort, httpsPort int) string {
 	return cardStyle.Render("🔗 Access URLs\n\n" + content)
 }
 
-// Logs component
-func RenderLogs(logs []LogEntry, maxLines int) string {
+// Enhanced logs component with scrolling support
+func RenderLogs(logs []LogEntry, maxLines int, scrollOffset int) string {
 	if len(logs) == 0 {
-		return cardStyle.Render("📋 Logs\n\n" + mutedStyle.Render("No logs yet..."))
+		return RenderInfoBox("📋 Logs", mutedStyle.Render("No logs yet..."))
 	}
 
 	var lines []string
-	start := 0
-	if len(logs) > maxLines {
-		start = len(logs) - maxLines
+	start := scrollOffset
+	end := start + maxLines
+
+	if end > len(logs) {
+		end = len(logs)
 	}
 
-	for i := start; i < len(logs); i++ {
+	if start < 0 {
+		start = 0
+	}
+
+	for i := start; i < end; i++ {
 		log := logs[i]
 		timestamp := mutedStyle.Render(log.Timestamp.Format("15:04:05"))
 		level := renderLogLevel(log.Level)
@@ -167,7 +175,23 @@ func RenderLogs(logs []LogEntry, maxLines int) string {
 	}
 
 	content := strings.Join(lines, "\n")
-	return cardStyle.Render("📋 Logs\n\n" + content)
+
+	// Add scroll indicator if there are more logs
+	var scrollIndicator string
+	if len(logs) > maxLines {
+		if start > 0 {
+			scrollIndicator = mutedStyle.Render("↑ More logs above...")
+		}
+		if end < len(logs) {
+			scrollIndicator = mutedStyle.Render("↓ More logs below...")
+		}
+	}
+
+	if scrollIndicator != "" {
+		content = content + "\n" + scrollIndicator
+	}
+
+	return RenderSection("📋 Recent Logs", cardStyle.Render(content))
 }
 
 // Helper functions

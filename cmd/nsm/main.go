@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/kashifsb/nsm/internal/app"
 	"github.com/kashifsb/nsm/internal/config"
-	"github.com/kashifsb/nsm/internal/ui"
 	"github.com/kashifsb/nsm/pkg/logger"
 )
 
 var (
-	version = "1.0.0"
+	version = "1.0.1"
 	commit  = "dev"
 )
 
@@ -34,20 +34,35 @@ func main() {
 		},
 	}
 
-	// Add flags
+	// Add flags WITHOUT conflicting shorthands
 	rootCmd.Flags().StringP("project-type", "t", "", "Project type (vite, react, go, rust, python, java, dotnet)")
 	rootCmd.Flags().StringP("domain", "d", "", "Custom domain (e.g., api.dev)")
 	rootCmd.Flags().StringP("command", "c", "", "Development command to run")
 	rootCmd.Flags().IntP("http-port", "p", 0, "HTTP port (0 = auto)")
 	rootCmd.Flags().IntP("https-port", "s", 0, "HTTPS port (0 = auto, prefers 443)")
+	rootCmd.Flags().Bool("headless", false, "Run without interactive UI")
 	rootCmd.Flags().BoolP("no-443", "n", false, "Don't use port 443")
 	rootCmd.Flags().BoolP("debug", "v", false, "Enable debug logging")
-	rootCmd.Flags().BoolP("headless", "h", false, "Run without interactive UI")
 	rootCmd.Flags().BoolP("auto-yes", "y", false, "Auto-confirm prompts")
 
 	if err := rootCmd.Execute(); err != nil {
-		logger.Error("Command execution failed", "error", err)
-		os.Exit(1)
+		// Provide better error context
+		if err.Error() == "shutdown completed with some errors" {
+			logger.Error("NSM shutdown completed with errors - check logs above for details")
+		} else {
+			logger.Error("Command execution failed", "error", err.Error())
+		}
+
+		// Exit with appropriate code
+		if strings.Contains(err.Error(), "timeout") {
+			os.Exit(124) // Timeout exit code
+		} else if strings.Contains(err.Error(), "permission") {
+			os.Exit(126) // Permission denied
+		} else if strings.Contains(err.Error(), "not found") {
+			os.Exit(127) // Command not found
+		} else {
+			os.Exit(1) // General error
+		}
 	}
 }
 
@@ -73,26 +88,25 @@ func runNSM(ctx context.Context, cmd *cobra.Command) error {
 }
 
 func runInteractive(ctx context.Context, cfg *config.Config) error {
-	model := ui.NewModel(cfg)
+	// Create and run the app with UI
+	appInstance, err := app.NewApp(cfg)
+	if err != nil {
+		return fmt.Errorf("create app: %w", err)
+	}
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
-
-	go func() {
-		<-ctx.Done()
-		p.Send(ui.ShutdownMsg{})
-	}()
-
-	_, err := p.Run()
-	return err
+	return appInstance.Run(ctx)
 }
 
 func runHeadless(ctx context.Context, cfg *config.Config) error {
 	// Direct execution without UI
 	logger.Info("Running in headless mode")
-	// Implementation for headless mode
-	return nil
+
+	// Create app instance
+	appInstance, err := app.NewApp(cfg)
+	if err != nil {
+		return fmt.Errorf("create app: %w", err)
+	}
+
+	// Run the app in headless mode
+	return appInstance.RunHeadless(ctx)
 }

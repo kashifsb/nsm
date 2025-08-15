@@ -16,6 +16,7 @@ import (
 
 	"github.com/kashifsb/nsm/internal/config"
 	"github.com/kashifsb/nsm/pkg/logger"
+	"github.com/kashifsb/nsm/pkg/utils"
 )
 
 type Runner struct {
@@ -54,6 +55,16 @@ func (r *Runner) Start(ctx context.Context, runnerCfg RunnerConfig) error {
 		return fmt.Errorf("parse command: %w", err)
 	}
 
+	// Validate working directory
+	if !utils.DirExists(runnerCfg.WorkingDir) {
+		return fmt.Errorf("working directory does not exist: %s", runnerCfg.WorkingDir)
+	}
+
+	// Check if the command exists
+	if !utils.IsCommandAvailable(args[0]) {
+		return fmt.Errorf("command not found: %s", args[0])
+	}
+
 	// Create command
 	r.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	r.cmd.Dir = runnerCfg.WorkingDir
@@ -78,7 +89,8 @@ func (r *Runner) Start(ctx context.Context, runnerCfg RunnerConfig) error {
 	// Start command
 	logger.Info("Starting development command",
 		"command", runnerCfg.Command,
-		"working_dir", runnerCfg.WorkingDir)
+		"working_dir", runnerCfg.WorkingDir,
+		"args", args)
 
 	if err := r.cmd.Start(); err != nil {
 		return fmt.Errorf("start command: %w", err)
@@ -91,43 +103,71 @@ func (r *Runner) Start(ctx context.Context, runnerCfg RunnerConfig) error {
 	// Wait for completion
 	go r.waitForCompletion()
 
+	logger.Info("Development command started successfully", "pid", r.cmd.Process.Pid)
 	return nil
 }
 
 func (r *Runner) Stop() error {
 	if r.cmd == nil || r.cmd.Process == nil {
+		logger.Debug("No command to stop")
 		return nil
 	}
 
-	logger.Info("Stopping development command")
+	logger.Info("Stopping development command", "pid", r.cmd.Process.Pid)
 
-	// Send SIGTERM to the process group
-	pgid, err := syscall.Getpgid(r.cmd.Process.Pid)
-	if err == nil {
-		syscall.Kill(-pgid, syscall.SIGTERM)
-	} else {
-		// Fallback to killing just the main process
-		r.cmd.Process.Signal(os.Interrupt)
-	}
-
-	// Wait for graceful shutdown with timeout
+	// Try graceful shutdown first
 	done := make(chan error, 1)
 	go func() {
+		// Send SIGTERM to the process group
+		pgid, err := syscall.Getpgid(r.cmd.Process.Pid)
+		if err == nil {
+			// Kill the entire process group
+			err = syscall.Kill(-pgid, syscall.SIGTERM)
+			if err != nil {
+				logger.Debug("Failed to kill process group, trying main process", "error", err)
+				// Fallback to killing just the main process
+				err = r.cmd.Process.Signal(os.Interrupt)
+			}
+		} else {
+			logger.Debug("Failed to get process group, using main process", "error", err)
+			// Fallback to killing just the main process
+			err = r.cmd.Process.Signal(os.Interrupt)
+		}
+
+		if err != nil {
+			done <- fmt.Errorf("failed to send signal: %w", err)
+			return
+		}
+
+		// Wait for graceful shutdown
 		done <- r.cmd.Wait()
 	}()
 
+	// Wait for graceful shutdown with timeout
 	select {
-	case <-done:
-		logger.Info("Development command stopped gracefully")
+	case err := <-done:
+		if err != nil {
+			logger.Info("Development command stopped with error", "error", err)
+		} else {
+			logger.Info("Development command stopped gracefully")
+		}
 		return nil
 	case <-time.After(10 * time.Second):
 		logger.Warn("Development command didn't stop gracefully, forcing kill")
 
 		// Force kill the process group
-		if pgid, err := syscall.Getpgid(r.cmd.Process.Pid); err == nil {
-			syscall.Kill(-pgid, syscall.SIGKILL)
+		pgid, err := syscall.Getpgid(r.cmd.Process.Pid)
+		if err == nil {
+			err = syscall.Kill(-pgid, syscall.SIGKILL)
+			if err != nil {
+				logger.Warn("Failed to force kill process group", "error", err)
+			}
 		} else {
-			r.cmd.Process.Kill()
+			logger.Warn("Failed to get process group for force kill", "error", err)
+			// Fallback to killing just the main process
+			if err := r.cmd.Process.Kill(); err != nil {
+				logger.Warn("Failed to force kill main process", "error", err)
+			}
 		}
 
 		return fmt.Errorf("process killed after timeout")

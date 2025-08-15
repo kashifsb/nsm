@@ -83,6 +83,9 @@ func (a *App) Run(ctx context.Context) error {
 		tea.WithMouseCellMotion(),
 	)
 
+	// Set program reference in model for message passing
+	model.SetProgram(a.program)
+
 	// Initialize runner with UI program
 	a.runner = project.NewRunner(a.cfg, a.program)
 
@@ -125,6 +128,32 @@ func (a *App) Run(ctx context.Context) error {
 	return a.shutdown()
 }
 
+func (a *App) RunHeadless(ctx context.Context) error {
+	logger.Info("Starting NSM application in headless mode", "project", a.cfg.ProjectName)
+
+	// Run setup steps
+	if err := a.runSetup(ctx); err != nil {
+		return fmt.Errorf("setup failed: %w", err)
+	}
+
+	// Start services
+	if err := a.startServices(ctx); err != nil {
+		return fmt.Errorf("failed to start services: %w", err)
+	}
+
+	a.running = true
+	logger.Info("NSM running in headless mode",
+		"project", a.cfg.ProjectName,
+		"http_port", a.httpPort,
+		"https_port", a.httpsPort)
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+
+	// Cleanup
+	return a.shutdown()
+}
+
 func (a *App) runSetup(ctx context.Context) error {
 	steps := []SetupStep{
 		{
@@ -152,29 +181,66 @@ func (a *App) runSetup(ctx context.Context) error {
 	for _, step := range steps {
 		logger.Info("Executing setup step", "step", step.Name)
 
-		a.program.Send(ui.StepUpdateMsg{
-			StepName: step.Name,
-			Status:   "loading",
-			Details:  "In progress...",
-		})
-
-		if err := step.Execute(ctx); err != nil {
+		// Send UI update if program is available
+		if a.program != nil {
 			a.program.Send(ui.StepUpdateMsg{
 				StepName: step.Name,
-				Status:   "error",
-				Details:  err.Error(),
+				Status:   "loading",
+				Details:  "In progress...",
 			})
-			return fmt.Errorf("step %s failed: %w", step.Name, err)
 		}
 
-		a.program.Send(ui.StepUpdateMsg{
-			StepName: step.Name,
-			Status:   "success",
-			Details:  "Completed",
-		})
+		// Execute step with timeout
+		stepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		stepDone := make(chan error, 1)
+
+		go func(step SetupStep) {
+			stepDone <- step.Execute(stepCtx)
+		}(step)
+
+		select {
+		case err := <-stepDone:
+			cancel()
+			if err != nil {
+				// Send UI error if program is available
+				if a.program != nil {
+					a.program.Send(ui.StepUpdateMsg{
+						StepName: step.Name,
+						Status:   "error",
+						Details:  err.Error(),
+					})
+				}
+				return fmt.Errorf("step %s failed: %w", step.Name, err)
+			}
+		case <-stepCtx.Done():
+			cancel()
+			err := fmt.Errorf("step %s timed out after 30 seconds", step.Name)
+			// Send UI error if program is available
+			if a.program != nil {
+				a.program.Send(ui.StepUpdateMsg{
+					StepName: step.Name,
+					Status:   "error",
+					Details:  err.Error(),
+				})
+			}
+			return err
+		}
+
+		// Send UI success if program is available
+		if a.program != nil {
+			a.program.Send(ui.StepUpdateMsg{
+				StepName: step.Name,
+				Status:   "success",
+				Details:  "Completed",
+			})
+		}
 	}
 
-	a.program.Send(ui.SetupCompleteMsg{})
+	// Send UI completion if program is available
+	if a.program != nil {
+		a.program.Send(ui.SetupCompleteMsg{})
+	}
+
 	return nil
 }
 
@@ -332,11 +398,13 @@ func (a *App) startServices(ctx context.Context) error {
 	}
 
 	// Start development server
-	a.program.Send(ui.StepUpdateMsg{
-		StepName: "dev",
-		Status:   "loading",
-		Details:  "Starting development server",
-	})
+	if a.program != nil {
+		a.program.Send(ui.StepUpdateMsg{
+			StepName: "dev",
+			Status:   "loading",
+			Details:  "Starting development server",
+		})
+	}
 
 	runnerConfig := project.RunnerConfig{
 		WorkingDir: a.cfg.ProjectDir,
@@ -350,20 +418,48 @@ func (a *App) startServices(ctx context.Context) error {
 	}
 
 	if err := a.runner.Start(ctx, runnerConfig); err != nil {
+		if a.program != nil {
+			a.program.Send(ui.StepUpdateMsg{
+				StepName: "dev",
+				Status:   "error",
+				Details:  fmt.Sprintf("Failed to start: %v", err),
+			})
+		}
 		return fmt.Errorf("start development server: %w", err)
 	}
 
-	// Wait for development server to be ready
-	if err := a.portManager.WaitForPort(a.httpPort, 30*time.Second); err != nil {
-		logger.Warn("Development server may not be ready", "error", err)
-		// Don't fail - the proxy will show a nice error page
+	// Wait for development server to be ready with better error handling
+	logger.Info("Waiting for development server to be ready", "port", a.httpPort)
+
+	serverReady := make(chan bool, 1)
+	go func() {
+		if err := a.portManager.WaitForPort(a.httpPort, 30*time.Second); err != nil {
+			logger.Warn("Development server may not be ready", "error", err)
+			serverReady <- false
+		} else {
+			serverReady <- true
+		}
+	}()
+
+	// Wait for server readiness or timeout
+	select {
+	case ready := <-serverReady:
+		if ready {
+			logger.Info("Development server is ready", "port", a.httpPort)
+		} else {
+			logger.Warn("Development server may not be ready, continuing anyway")
+		}
+	case <-time.After(35 * time.Second):
+		logger.Warn("Timeout waiting for development server, continuing anyway")
 	}
 
-	a.program.Send(ui.StepUpdateMsg{
-		StepName: "dev",
-		Status:   "success",
-		Details:  fmt.Sprintf("Running on port %d", a.httpPort),
-	})
+	if a.program != nil {
+		a.program.Send(ui.StepUpdateMsg{
+			StepName: "dev",
+			Status:   "success",
+			Details:  fmt.Sprintf("Running on port %d", a.httpPort),
+		})
+	}
 
 	return nil
 }
@@ -373,45 +469,72 @@ func (a *App) shutdown() error {
 
 	var errs []error
 
-	// Stop development server
+	// Stop development server with better error handling
 	if a.runner != nil {
+		logger.Info("Stopping development server")
 		if err := a.runner.Stop(); err != nil {
+			logger.Warn("Failed to stop development server gracefully", "error", err)
 			errs = append(errs, fmt.Errorf("stop development server: %w", err))
+		} else {
+			logger.Info("Development server stopped successfully")
 		}
 	}
 
-	// Stop proxy server
+	// Stop proxy server with better error handling
 	if a.proxyServer != nil {
+		logger.Info("Stopping proxy server")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := a.proxyServer.Stop(ctx); err != nil {
+			logger.Warn("Failed to stop proxy server gracefully", "error", err)
 			errs = append(errs, fmt.Errorf("stop proxy server: %w", err))
+		} else {
+			logger.Info("Proxy server stopped successfully")
 		}
 	}
 
-	// Cleanup DNS
+	// Cleanup DNS with better error handling
 	if a.dnsResolver != nil {
+		logger.Info("Cleaning up DNS configuration")
 		if err := a.dnsResolver.Cleanup(); err != nil {
+			logger.Warn("Failed to cleanup DNS configuration", "error", err)
 			errs = append(errs, fmt.Errorf("cleanup DNS: %w", err))
+		} else {
+			logger.Info("DNS configuration cleaned up successfully")
 		}
 	}
 
-	// Release ports
+	// Release ports with better error handling
 	if a.portManager != nil {
-		a.portManager.ReleasePort(a.httpPort)
-		a.portManager.ReleasePort(a.httpsPort)
+		logger.Info("Releasing ports")
+		if a.httpPort > 0 {
+			a.portManager.ReleasePort(a.httpPort)
+			logger.Debug("Released HTTP port", "port", a.httpPort)
+		}
+		if a.httpsPort > 0 {
+			a.portManager.ReleasePort(a.httpsPort)
+			logger.Debug("Released HTTPS port", "port", a.httpsPort)
+		}
 	}
 
-	// Write port info file for cleanup
+	// Clean up port info file
 	portInfoPath := filepath.Join(a.cfg.ProjectDir, ".nsm-ports.json")
 	if utils.FileExists(portInfoPath) {
-		os.Remove(portInfoPath)
-		logger.Debug("Removed port info file", "path", portInfoPath)
+		if err := os.Remove(portInfoPath); err != nil {
+			logger.Warn("Failed to remove port info file", "path", portInfoPath, "error", err)
+		} else {
+			logger.Debug("Removed port info file", "path", portInfoPath)
+		}
 	}
 
+	// Log shutdown results
 	if len(errs) > 0 {
-		return fmt.Errorf("shutdown errors: %v", errs)
+		logger.Warn("Shutdown completed with some errors", "error_count", len(errs))
+		for i, err := range errs {
+			logger.Warn("Shutdown error", "index", i, "error", err.Error())
+		}
+		return fmt.Errorf("shutdown completed with %d errors: %v", len(errs), errs)
 	}
 
 	logger.Info("Shutdown completed successfully")

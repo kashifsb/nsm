@@ -7,37 +7,41 @@ import (
 )
 
 var (
-	// Color palette
-	primaryColor    = lipgloss.Color("#7C3AED") // Purple
-	successColor    = lipgloss.Color("#10B981") // Green
-	warningColor    = lipgloss.Color("#F59E0B") // Yellow
+	// Enhanced color palette for better UX
+	primaryColor    = lipgloss.Color("#6366F1") // Indigo
+	successColor    = lipgloss.Color("#10B981") // Emerald
+	warningColor    = lipgloss.Color("#F59E0B") // Amber
 	errorColor      = lipgloss.Color("#EF4444") // Red
 	accentColor     = lipgloss.Color("#06B6D4") // Cyan
 	mutedColor      = lipgloss.Color("#6B7280") // Gray
-	backgroundColor = lipgloss.Color("#0F172A") // Dark blue
+	backgroundColor = lipgloss.Color("#0F172A") // Slate 900
+	cardBgColor     = lipgloss.Color("#1E293B") // Slate 800
+	borderColor     = lipgloss.Color("#334155") // Slate 700
 
-	// Base styles
+	// Base styles with improved spacing
 	baseStyle = lipgloss.NewStyle().
 			Padding(1, 2).
 			Margin(1, 0)
 
-	// Header styles
+	// Enhanced header styles
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(primaryColor).
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(primaryColor).
+			BorderBackground(cardBgColor).
+			Background(cardBgColor).
 			Padding(1, 3).
 			Margin(1, 0)
 
 	logoStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(primaryColor).
-			Background(lipgloss.Color("#1E1B4B")).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(primaryColor).
 			Padding(0, 2).
 			Margin(0, 1)
 
-	// Status styles
+	// Enhanced status styles
 	successStyle = lipgloss.NewStyle().
 			Foreground(successColor).
 			Bold(true)
@@ -56,19 +60,21 @@ var (
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
-	// Component styles
+	// Enhanced component styles
 	cardStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(mutedColor).
+			BorderForeground(borderColor).
+			Background(cardBgColor).
 			Padding(1, 2).
 			Margin(0, 1)
 
 	highlightStyle = lipgloss.NewStyle().
 			Background(primaryColor).
 			Foreground(lipgloss.Color("#FFFFFF")).
-			Padding(0, 1)
+			Padding(0, 1).
+			Bold(true)
 
-	// Progress styles
+	// Enhanced progress styles
 	progressBarStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("#374151")).
 				Height(1)
@@ -77,18 +83,18 @@ var (
 				Background(primaryColor).
 				Height(1)
 
-	// Table styles
+	// Enhanced table styles
 	tableHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(primaryColor).
 				BorderStyle(lipgloss.NormalBorder()).
 				BorderBottom(true).
-				BorderForeground(mutedColor)
+				BorderForeground(borderColor)
 
 	tableCellStyle = lipgloss.NewStyle().
 			Padding(0, 1)
 
-	// Button styles
+	// Enhanced button styles
 	buttonStyle = lipgloss.NewStyle().
 			Bold(true).
 			Padding(0, 3).
@@ -100,6 +106,27 @@ var (
 	buttonActiveStyle = buttonStyle.Copy().
 				Background(primaryColor).
 				Foreground(lipgloss.Color("#FFFFFF"))
+
+	// New styles for better UX
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(primaryColor).
+			MarginBottom(1)
+
+	subtitleStyle = lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Italic(true)
+
+	urlStyle = lipgloss.NewStyle().
+			Foreground(accentColor).
+			Underline(true)
+
+	statusCardStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Background(cardBgColor).
+			Padding(1, 2).
+			Margin(0, 1)
 )
 
 // Adaptive styles that respond to terminal width
@@ -111,7 +138,7 @@ func adaptiveCardStyle(width int) lipgloss.Style {
 	return cardStyle.Copy().Width(width - 6)
 }
 
-// Status indicators
+// Enhanced status indicators with better visual feedback
 func StatusIndicator(status string) string {
 	indicators := map[string]string{
 		"success": successStyle.Render("✓"),
@@ -128,7 +155,7 @@ func StatusIndicator(status string) string {
 	return mutedStyle.Render("•")
 }
 
-// Progress bar component
+// Enhanced progress bar component
 func ProgressBar(progress float64, width int) string {
 	if width < 10 {
 		width = 10
@@ -143,4 +170,28 @@ func ProgressBar(progress float64, width int) string {
 	empty := progressBarStyle.Render(strings.Repeat("░", width-filled))
 
 	return bar + empty
+}
+
+// New utility functions for better UX
+func RenderSection(title string, content string) string {
+	titleSection := titleStyle.Render(title)
+	return lipgloss.JoinVertical(lipgloss.Left, titleSection, content)
+}
+
+func RenderInfoBox(title string, content string) string {
+	header := infoStyle.Render("ℹ " + title)
+	body := cardStyle.Render(content)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+}
+
+func RenderSuccessBox(title string, content string) string {
+	header := successStyle.Render("✓ " + title)
+	body := cardStyle.Render(content)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+}
+
+func RenderErrorBox(title string, content string) string {
+	header := errorStyle.Render("✗ " + title)
+	body := cardStyle.Render(content)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }

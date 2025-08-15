@@ -203,39 +203,48 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%.1fh", d.Hours())
 }
 
-func HumanizeTime(t time.Time) string {
-	now := time.Now()
-	diff := now.Sub(t)
+// Command execution utilities
+func RunCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
 
-	if diff < time.Minute {
-		return "just now"
+func RunCommandWithOutput(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("command failed: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// File utilities
+func AppendToFile(path, content string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(content); err != nil {
+		return fmt.Errorf("write to file: %w", err)
 	}
 
-	if diff < time.Hour {
-		minutes := int(diff.Minutes())
-		if minutes == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", minutes)
-	}
+	return nil
+}
 
-	if diff < 24*time.Hour {
-		hours := int(diff.Hours())
-		if hours == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", hours)
-	}
+func WriteFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0644)
+}
 
-	days := int(diff.Hours() / 24)
-	if days == 1 {
-		return "1 day ago"
+func ReadFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read file: %w", err)
 	}
-	if days < 7 {
-		return fmt.Sprintf("%d days ago", days)
-	}
-
-	return t.Format("2006-01-02")
+	return string(content), nil
 }
 
 // Configuration utilities
